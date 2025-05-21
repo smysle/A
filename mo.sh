@@ -619,12 +619,19 @@ handle_vertex_billing() {
   local billing_list_cmd="gcloud beta billing projects list --billing-account=\"$billing_acc\" --format=\"table(projectId)\" 2>/dev/null"
   log "INFO" "执行命令: $billing_list_cmd"
   
-  # 保存输出用于调试
-  local billing_list_output
-  billing_list_output=$(eval "$billing_list_cmd")
+  # 保存输出用于调试，添加错误处理防止命令失败导致脚本退出
+  local billing_list_output=""
+  billing_list_output=$(eval "$billing_list_cmd" || echo "ERROR:命令执行失败")
   
-  # 移除标题行
-  mapfile -t BILLING_PROJECTS < <(echo "$billing_list_output" | grep -v "^PROJECT_ID" | grep -v "^-" | grep -v "^$" || echo "")
+  # 检查命令是否失败
+  if [[ "$billing_list_output" == ERROR:* ]]; then
+    log "WARN" "获取项目列表失败，假设没有关联项目"
+    BILLING_PROJECTS=()
+  else
+    # 移除标题行
+    mapfile -t BILLING_PROJECTS < <(echo "$billing_list_output" | grep -v "^PROJECT_ID" | grep -v "^-" | grep -v "^$" || echo "")
+  fi
+  
   local account_project_count=${#BILLING_PROJECTS[@]}
   
   log "INFO" "结算账户 $billing_acc 已绑定 $account_project_count / $MAX_PROJECTS_PER_ACCOUNT 个项目"
@@ -649,10 +656,19 @@ handle_vertex_billing() {
   echo "3. 同时处理现有项目和创建新项目"
   echo "0. 返回上一级菜单"
   echo ""
-  read -p "请选择 [0-3]: " operation_choice
-  
-  # 使用本地变量跟踪操作结果
-  local operation_result=0
+
+  # 使用循环处理用户输入，确保输入有效
+  local operation_choice=""
+  while true; do
+    read -p "请选择 [0-3]: " operation_choice
+    
+    # 检查输入是否为有效选项
+    if [[ "$operation_choice" =~ ^[0-3]$ ]]; then
+      break  # 输入有效，退出循环
+    else
+      echo "无效选项: '$operation_choice'，请输入0-3之间的数字"
+    fi
+  done
   
   case $operation_choice in
     1) 
@@ -797,11 +813,20 @@ handle_new_projects() {
   # 获取现有项目数量 - 使用更可靠的方法获取
   log "INFO" "获取结算账户 $billing_acc 的已绑定项目..."
   local billing_list_cmd="gcloud beta billing projects list --billing-account=\"$billing_acc\" --format=\"table(projectId)\" 2>/dev/null"
-  local billing_list_output
-  billing_list_output=$(eval "$billing_list_cmd")
+  local billing_list_output=""
   
-  # 移除标题行，获取实际项目列表
-  mapfile -t ACCOUNT_PROJECTS < <(echo "$billing_list_output" | grep -v "^PROJECT_ID" | grep -v "^-" | grep -v "^$" || echo "")
+  # 添加错误处理，防止命令失败导致脚本退出
+  billing_list_output=$(eval "$billing_list_cmd" || echo "ERROR:命令执行失败")
+  
+  # 检查命令是否失败
+  if [[ "$billing_list_output" == ERROR:* ]]; then
+    log "WARN" "获取项目列表失败，假设没有关联项目"
+    ACCOUNT_PROJECTS=()
+  else
+    # 移除标题行，获取实际项目列表
+    mapfile -t ACCOUNT_PROJECTS < <(echo "$billing_list_output" | grep -v "^PROJECT_ID" | grep -v "^-" | grep -v "^$" || echo "")
+  fi
+  
   local account_project_count=${#ACCOUNT_PROJECTS[@]}
   
   log "INFO" "结算账户 $billing_acc 当前已绑定 $account_project_count 个项目"
@@ -939,27 +964,45 @@ vertex_main() {
     echo "2. 批量处理所有结算账户"
     echo "0. 返回主菜单"
     
-    read -p "请选择操作 [0-2]: " mode
+    # 使用循环处理用户输入，确保输入有效
+    local mode=""
+    while true; do
+      read -p "请选择操作 [0-2]: " mode
+      
+      # 检查输入是否为有效选项
+      if [[ "$mode" =~ ^[0-2]$ ]]; then
+        break  # 输入有效，退出循环
+      else
+        echo "无效选项: '$mode'，请输入0-2之间的数字"
+      fi
+    done
+    
     case $mode in
       1) 
         echo ""
-        read -p "请输入要处理的结算账户编号 [1-$billing_count]: " acc_num
-        if [[ "$acc_num" =~ ^[0-9]+$ ]] && [ "$acc_num" -ge 1 ] && [ "$acc_num" -le $billing_count ]; then
-          BILLING_ACCOUNT="${ALL_BILLING[$((acc_num-1))]%% *}"
+        local acc_num=""
+        while true; do
+          read -p "请输入要处理的结算账户编号 [1-$billing_count]: " acc_num
           
-          # 再次确认使用结算账户
-          echo ""
-          show_warning "
-          您将使用结算账户: $BILLING_ACCOUNT
-          
-          此操作将创建实际的 GCP 资源并产生费用。
-          " || return 1
-          
-          handle_vertex_billing "$BILLING_ACCOUNT"
-        else
-          log "ERROR" "无效的结算账户编号: $acc_num"
-          return 1
-        fi
+          # 检查输入是否为有效选项
+          if [[ "$acc_num" =~ ^[0-9]+$ ]] && [ "$acc_num" -ge 1 ] && [ "$acc_num" -le $billing_count ]; then
+            break  # 输入有效，退出循环
+          else
+            echo "无效的结算账户编号: '$acc_num'，请输入1-$billing_count之间的数字"
+          fi
+        done
+        
+        BILLING_ACCOUNT="${ALL_BILLING[$((acc_num-1))]%% *}"
+        
+        # 再次确认使用结算账户
+        echo ""
+        show_warning "
+        您将使用结算账户: $BILLING_ACCOUNT
+        
+        此操作将创建实际的 GCP 资源并产生费用。
+        " || return 1
+        
+        handle_vertex_billing "$BILLING_ACCOUNT"
         ;;
       2)
         log "INFO" "将依次处理所有 $billing_count 个结算账户"
@@ -1031,14 +1074,24 @@ gemini_main() {
   echo "0. 返回主菜单"
   echo ""
   
-  read -p "请选择操作 [0-3]: " gemini_choice
+  # 使用循环处理用户输入，确保输入有效
+  local gemini_choice=""
+  while true; do
+    read -p "请选择操作 [0-3]: " gemini_choice
+    
+    # 检查输入是否为有效选项
+    if [[ "$gemini_choice" =~ ^[0-3]$ ]]; then
+      break  # 输入有效，退出循环
+    else
+      echo "无效选项: '$gemini_choice'，请输入0-3之间的数字"
+    fi
+  done
   
   case $gemini_choice in
     1) gemini_create_projects ;;
     2) gemini_get_keys_from_existing ;;
     3) gemini_delete_projects ;;
     0|"") return 0 ;;
-    *) log "ERROR" "无效选项: $gemini_choice"; return 1 ;;
   esac
   
   # 显示执行时间
@@ -1483,7 +1536,19 @@ show_menu() {
   echo "4. 帮助和使用说明"
   echo "0. 退出"
   echo "======================================================"
-  read -p "请输入选项 [0-4]: " choice
+  
+  # 使用循环处理用户输入，确保输入有效
+  local choice=""
+  while true; do
+    read -p "请输入选项 [0-4]: " choice
+    
+    # 检查输入是否为有效选项
+    if [[ "$choice" =~ ^[0-4]$ ]]; then
+      break  # 输入有效，退出循环
+    else
+      echo "无效选项: '$choice'，请输入0-4之间的数字"
+    fi
+  done
 
   case $choice in
     1) 
@@ -1518,11 +1583,8 @@ show_menu() {
       echo -e "${YELLOW}请记得检查并删除不需要的项目以避免额外费用${NC}"
       exit 0 
       ;;
-    *) 
-      echo "无效选项 '$choice'，请重新选择。"; 
-      sleep 2 
-      ;;
   esac
+  
   if [[ "$choice" =~ ^[1-4]$ ]]; then 
     echo ""; 
     read -p "按回车键返回主菜单..."; 
@@ -1546,7 +1608,20 @@ configure_vertex_settings() {
     echo "6. 最大重试次数: $MAX_RETRY_ATTEMPTS"
     echo "0. 返回主菜单"
     echo "======================================================"
-    read -p "请选择要修改的设置 [0-6]: " setting_choice
+    
+    # 使用循环处理用户输入，确保输入有效
+    local setting_choice=""
+    while true; do
+      read -p "请选择要修改的设置 [0-6]: " setting_choice
+      
+      # 检查输入是否为有效选项
+      if [[ "$setting_choice" =~ ^[0-6]$ ]]; then
+        break  # 输入有效，退出循环
+      else
+        echo "无效选项: '$setting_choice'，请输入0-6之间的数字"
+      fi
+    done
+    
     case $setting_choice in
       1) read -p "请输入新的项目前缀 (留空取消): " new_prefix
          if [ -n "$new_prefix" ]; then
@@ -1627,7 +1702,18 @@ show_help() {
   echo "0. 返回主菜单"
   echo ""
   
-  read -p "请选择 [1-7, 0 返回]: " help_choice
+  # 使用循环处理用户输入，确保输入有效
+  local help_choice=""
+  while true; do
+    read -p "请选择 [1-7, 0 返回]: " help_choice
+    
+    # 检查输入是否有效
+    if [[ "$help_choice" =~ ^[0-7]$ ]]; then
+      break  # 输入有效，退出循环
+    else
+      echo "无效选项: '$help_choice'，请输入0-7之间的数字"
+    fi
+  done
   
   case $help_choice in
     1) show_general_help ;;
@@ -1637,7 +1723,7 @@ show_help() {
     5) show_troubleshooting ;;
     6) show_examples ;;
     7) show_api_comparison ;;
-    0|"") return ;;
+    0) return ;;
     *) 
       echo "无效选项，显示通用帮助..."
       sleep 1

@@ -127,7 +127,11 @@ require_cmd() {
 # 交互确认
 ask_yes_no() {
   local prompt="$1" default=${2:-N} resp
-  [[ -t 0 ]] && read -r -p "$prompt [${default}] " resp
+  if [[ "$default" == "N" ]]; then
+    [[ -t 0 ]] && read -r -p "$prompt [y/N]: " resp
+  else
+    [[ -t 0 ]] && read -r -p "$prompt [Y/n]: " resp
+  fi
   resp=${resp:-$default}
   [[ $resp =~ ^[Yy]$ ]]
 }
@@ -697,18 +701,33 @@ handle_existing_projects() {
   done
   echo ""
   
-  read -p "请输入项目编号 [0-$account_project_count]: " proj_num_choice
+  local proj_num_choice=""
+  while true; do
+    read -p "请输入项目编号 [0-$account_project_count]: " proj_num_choice
+    
+    # 如果输入为空，提示用户重新输入
+    if [[ -z "$proj_num_choice" ]]; then
+      echo "输入不能为空，请重新输入项目编号"
+      continue
+    fi
+    
+    # 验证输入的有效性
+    if [[ "$proj_num_choice" == "0" ]]; then
+      break
+    elif [[ "$proj_num_choice" =~ ^[0-9]+$ ]] && [ "$proj_num_choice" -ge 1 ] && [ "$proj_num_choice" -le $account_project_count ]; then
+      break
+    else
+      echo "无效的项目编号: $proj_num_choice，请重新输入"
+    fi
+  done
   
   local selected_projects=()
   if [[ "$proj_num_choice" == "0" ]]; then
     log "INFO" "将处理所有 $account_project_count 个项目"
     selected_projects=("${ACCOUNT_PROJECTS[@]}")
-  elif [[ "$proj_num_choice" =~ ^[0-9]+$ ]] && [ "$proj_num_choice" -ge 1 ] && [ "$proj_num_choice" -le $account_project_count ]; then
+  else
     selected_projects=("${ACCOUNT_PROJECTS[$((proj_num_choice-1))]}")
     log "INFO" "将处理项目: ${selected_projects[0]}"
-  else
-    log "ERROR" "无效的项目编号: $proj_num_choice"
-    return 1
   fi
   
   # 警告用户操作将产生费用
@@ -779,16 +798,27 @@ handle_new_projects() {
   log "INFO" "结算账户最多可以关联 $MAX_PROJECTS_PER_ACCOUNT 个项目"
   log "INFO" "当前已关联 $account_project_count 个项目，还可以创建 $max_new_projects 个新项目"
   
-  read -p "请输入要创建的新项目数量 [1-$max_new_projects]: " num_to_create
-  
-  # 验证输入
-  if ! [[ "$num_to_create" =~ ^[0-9]+$ ]] || [ "$num_to_create" -lt 1 ] || [ "$num_to_create" -gt $max_new_projects ]; then
-    log "ERROR" "无效的项目数量: $num_to_create"
-    return 1
-  fi
+  local num_to_create=""
+  while true; do
+    read -p "请输入要创建的新项目数量 [1-$max_new_projects]: " num_to_create
+    
+    # 如果输入为空，提示用户重新输入
+    if [[ -z "$num_to_create" ]]; then
+      echo "输入不能为空，请重新输入数量"
+      continue
+    fi
+    
+    # 验证输入的有效性
+    if [[ "$num_to_create" =~ ^[0-9]+$ ]] && [ "$num_to_create" -ge 1 ] && [ "$num_to_create" -le $max_new_projects ]; then
+      break
+    else
+      echo "无效的项目数量: $num_to_create，应在1-$max_new_projects之间，请重新输入"
+    fi
+  done
   
   # 让用户自定义项目前缀
   local default_prefix="vertex-$(date +%m%d)"
+  local custom_prefix=""
   read -p "请输入项目前缀 (默认: $default_prefix): " custom_prefix
   custom_prefix=${custom_prefix:-$default_prefix}
   
@@ -1789,11 +1819,22 @@ show_warning() {
   echo -e "${YELLOW}${border}${NC}"
   
   if [ -t 0 ]; then  # 检查是否在交互式终端
-    read -p "已阅读警告并确认继续? [y/N]: " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-      log "INFO" "用户取消操作"
-      return 1
-    fi
+    local confirm=""
+    while true; do
+      read -p "已阅读警告并确认继续? [y/N]: " confirm
+      # 如果输入为空，默认为N
+      if [[ -z "$confirm" ]]; then
+        log "INFO" "用户取消操作"
+        return 1
+      elif [[ "$confirm" =~ ^[Yy]$ ]]; then
+        break
+      elif [[ "$confirm" =~ ^[Nn]$ ]]; then
+        log "INFO" "用户取消操作"
+        return 1
+      else
+        echo "无效输入，请输入y或n"
+      fi
+    done
   fi
   return 0
 }

@@ -32,7 +32,7 @@ ENABLE_EXTRA_ROLES=("${ENABLE_EXTRA_ROLES[@]:-roles/iam.serviceAccountUser roles
 
 # 添加版本号和脚本信息
 VERSION="1.0.0"
-LAST_UPDATED="2023-06-26"
+LAST_UPDATED="2025-05-22"
 
 # 添加颜色定义到开头
 RED='\033[0;31m'

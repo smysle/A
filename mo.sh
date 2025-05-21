@@ -11,7 +11,8 @@ TEMP_DIR="/tmp/gcp_script_$(date +%s)"
 
 # Gemini模式配置
 TIMESTAMP=$(date +%s)
-RANDOM_CHARS=$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 4 | head -n 1)
+# 修改随机字符生成方式，避免管道操作可能导致的SIGPIPE错误
+RANDOM_CHARS=$(date +%s%N | sha256sum | head -c4)
 EMAIL_USERNAME="momo${RANDOM_CHARS}${TIMESTAMP:(-4)}"
 GEMINI_TOTAL_PROJECTS=175  # 默认项目数
 PURE_KEY_FILE="key.txt"

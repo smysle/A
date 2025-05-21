@@ -612,7 +612,19 @@ handle_vertex_billing() {
   log "INFO" "======================================================"
   
   # ===== 步骤1: 检查已绑定到此结算账户的项目 =====
-  mapfile -t BILLING_PROJECTS < <(gcloud beta billing projects list --billing-account="$billing_acc" --format='value(projectId)' 2>/dev/null || echo "")
+  # 增加调试输出，并使用更明确的命令格式
+  log "INFO" "获取绑定到结算账户 $billing_acc 的项目列表..."
+  
+  # 使用更可靠的命令直接获取项目数量，并显示命令输出
+  local billing_list_cmd="gcloud beta billing projects list --billing-account=\"$billing_acc\" --format=\"table(projectId)\" 2>/dev/null"
+  log "INFO" "执行命令: $billing_list_cmd"
+  
+  # 保存输出用于调试
+  local billing_list_output
+  billing_list_output=$(eval "$billing_list_cmd")
+  
+  # 移除标题行
+  mapfile -t BILLING_PROJECTS < <(echo "$billing_list_output" | grep -v "^PROJECT_ID" | grep -v "^-" | grep -v "^$" || echo "")
   local account_project_count=${#BILLING_PROJECTS[@]}
   
   log "INFO" "结算账户 $billing_acc 已绑定 $account_project_count / $MAX_PROJECTS_PER_ACCOUNT 个项目"
@@ -782,9 +794,17 @@ handle_existing_projects() {
 handle_new_projects() {
   local billing_acc="$1"
   
-  # 获取现有项目数量
-  mapfile -t ACCOUNT_PROJECTS < <(gcloud beta billing projects list --billing-account="$billing_acc" --format='value(projectId)' 2>/dev/null || echo "")
+  # 获取现有项目数量 - 使用更可靠的方法获取
+  log "INFO" "获取结算账户 $billing_acc 的已绑定项目..."
+  local billing_list_cmd="gcloud beta billing projects list --billing-account=\"$billing_acc\" --format=\"table(projectId)\" 2>/dev/null"
+  local billing_list_output
+  billing_list_output=$(eval "$billing_list_cmd")
+  
+  # 移除标题行，获取实际项目列表
+  mapfile -t ACCOUNT_PROJECTS < <(echo "$billing_list_output" | grep -v "^PROJECT_ID" | grep -v "^-" | grep -v "^$" || echo "")
   local account_project_count=${#ACCOUNT_PROJECTS[@]}
+  
+  log "INFO" "结算账户 $billing_acc 当前已绑定 $account_project_count 个项目"
   
   # 计算可创建的最大项目数
   local max_new_projects=$((MAX_PROJECTS_PER_ACCOUNT - account_project_count))
@@ -1820,22 +1840,41 @@ show_warning() {
   
   if [ -t 0 ]; then  # 检查是否在交互式终端
     local confirm=""
-    while true; do
+    local retry_count=0
+    local max_retries=3
+    
+    while [ $retry_count -lt $max_retries ]; do
       read -p "已阅读警告并确认继续? [y/N]: " confirm
-      # 如果输入为空，默认为N
-      if [[ -z "$confirm" ]]; then
-        log "INFO" "用户取消操作"
-        return 1
+      
+      # 处理各种输入情况
+      if [[ -z "$confirm" || "$confirm" =~ ^[Nn]$ ]]; then
+        # 用户输入空或N，再次确认是否退出
+        read -p "您选择了取消，确认要退出吗? [y/N]: " exit_confirm
+        if [[ -z "$exit_confirm" || "$exit_confirm" =~ ^[Yy]$ ]]; then
+          log "INFO" "用户取消操作"
+          return 1
+        else
+          # 用户不想退出，重新开始确认流程
+          echo "请重新确认是否继续操作"
+          ((retry_count++))
+          continue
+        fi
       elif [[ "$confirm" =~ ^[Yy]$ ]]; then
-        break
-      elif [[ "$confirm" =~ ^[Nn]$ ]]; then
-        log "INFO" "用户取消操作"
-        return 1
+        # 用户确认继续
+        return 0
       else
+        # 无效输入
         echo "无效输入，请输入y或n"
+        ((retry_count++))
       fi
     done
+    
+    # 达到最大重试次数，默认退出
+    log "INFO" "多次无效输入，操作已取消"
+    return 1
   fi
+  
+  # 非交互模式默认返回成功
   return 0
 }
 

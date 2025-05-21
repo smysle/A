@@ -27,7 +27,8 @@ VERTEX_PROJECT_PREFIX="${PROJECT_PREFIX:-vertex}"
 MAX_PROJECTS_PER_ACCOUNT=${MAX_PROJECTS_PER_ACCOUNT:-3}
 SERVICE_ACCOUNT_NAME="${SERVICE_ACCOUNT_NAME:-vertex-admin}"
 KEY_DIR="${KEY_DIR:-./keys}"
-ENABLE_EXTRA_ROLES=(roles/iam.serviceAccountUser roles/aiplatform.user)
+# 确保ENABLE_EXTRA_ROLES数组始终有默认值，避免未定义变量错误
+ENABLE_EXTRA_ROLES=("${ENABLE_EXTRA_ROLES[@]:-roles/iam.serviceAccountUser roles/aiplatform.user}")
 
 # 添加版本号和脚本信息
 VERSION="1.0.0"
@@ -52,7 +53,7 @@ WELCOME_BANNER(){
   echo -e "${RED}${BOLD}⚠️  重要风险提示  ⚠️${NC}"
   echo -e "${RED}${BOLD}======================================================${NC}"
   echo -e "${YELLOW}• 使用本脚本批量创建 ${BOLD}Gemini API${NC}${YELLOW} 项目/密钥，可能触发GCP风控，导致账号或项目被 ${BOLD}停用/封禁${NC}${YELLOW}。请谨慎操作。${NC}"
-  echo -e "${YELLOW}• 使用 ${BOLD}Vertex AI${NC}${YELLOW} 需要有效结算账户，并会消耗 $300 免费额度后开始 ${BOLD}实际计费${NC}${YELLOW}。请务必设置预算和警报。${NC}"
+  echo -e "${YELLOW}• 使用 ${BOLD}Vertex AI${NC}${YELLOW} 需要有效结算账户，并会消耗 \$300 免费额度后开始 ${BOLD}实际计费${NC}${YELLOW}。请务必设置预算和警报。${NC}"
   echo -e "${YELLOW}• 本脚本仅作学习测试用途，作者及维护者不对任何费用或账号封禁承担责任。${NC}"
   echo -e "${RED}${BOLD}======================================================${NC}"
   echo ""
@@ -82,11 +83,11 @@ log() {
   timestamp=$(date '+%Y-%m-%d %H:%M:%S')
   
   case "$level" in
-    "INFO")     printf "[%s] [%s%s%s] %s\n" "$timestamp" "${BLUE}" "$level" "${NC}" "$msg" >&2 ;;
-    "SUCCESS")  printf "[%s] [%s%s%s] %s\n" "$timestamp" "${GREEN}" "$level" "${NC}" "$msg" >&2 ;;
-    "WARN")     printf "[%s] [%s%s%s] %s%s%s\n" "$timestamp" "${YELLOW}" "$level" "${NC}" "${YELLOW}" "$msg" "${NC}" >&2 ;;
-    "ERROR")    printf "[%s] [%s%s%s] %s%s%s\n" "$timestamp" "${RED}" "$level" "${NC}" "${RED}" "$msg" "${NC}" >&2 ;;
-    *)          printf "[%s] [%s] %s\n" "$timestamp" "$level" "$msg" >&2 ;;
+    "INFO")     printf "[%s] [%s%s%s] %s\n" "$timestamp" "${BLUE}" "$level" "${NC}" "$msg" ;;
+    "SUCCESS")  printf "[%s] [%s%s%s] %s\n" "$timestamp" "${GREEN}" "$level" "${NC}" "$msg" ;;
+    "WARN")     printf "[%s] [%s%s%s] %s\n" "$timestamp" "${YELLOW}" "$level" "${NC}" "${YELLOW}$msg${NC}" ;;
+    "ERROR")    printf "[%s] [%s%s%s] %s\n" "$timestamp" "${RED}" "$level" "${NC}" "${RED}$msg${NC}" ;;
+    *)          printf "[%s] [%s] %s\n" "$timestamp" "$level" "$msg" ;;
   esac
 }
 
@@ -1389,7 +1390,7 @@ show_menu() {
   
   echo "请选择功能:"
   echo "1. 创建 Gemini API 密钥 (Google大语言模型API，已内置完整功能)"
-  echo "2. 创建 Vertex AI API 密钥 ${YELLOW}(需要结算账户，会产生费用)${NC}"
+  echo -e "2. 创建 Vertex AI API 密钥 ${YELLOW}(需要结算账户，会产生费用)${NC}"
   echo "3. 修改 Vertex 配置参数"
   echo "4. 帮助和使用说明"
   echo "0. 退出"
@@ -1565,7 +1566,7 @@ show_general_help() {
   echo -e "${RED}${BOLD}======================================================${NC}"
   echo -e "${YELLOW}• 使用本脚本批量创建 ${BOLD}Gemini API${NC}${YELLOW} 项目/密钥，可能触发GCP风控，导致账号或项目被 ${BOLD}停用/封禁${NC}${YELLOW}。${NC}"
   echo -e "${YELLOW}• 批量创建项目可能违反Google服务条款，可能导致账号被${BOLD}永久停用${NC}${YELLOW}。${NC}"
-  echo -e "${YELLOW}• 使用 ${BOLD}Vertex AI${NC}${YELLOW} 需要有效结算账户，并会消耗 $300 免费额度后开始 ${BOLD}实际计费${NC}${YELLOW}。${NC}"
+  echo -e "${YELLOW}• 使用 ${BOLD}Vertex AI${NC}${YELLOW} 需要有效结算账户，并会消耗 \$300 免费额度后开始 ${BOLD}实际计费${NC}${YELLOW}。${NC}"
   echo -e "${YELLOW}• 如不及时关闭或删除项目，可能产生${BOLD}持续费用${NC}${YELLOW}，直至信用卡额度用尽。${NC}"
   echo -e "${YELLOW}• 本脚本使用可能导致GCP账号风控审核，进而影响${BOLD}所有Google服务的使用${NC}${YELLOW}。${NC}"
   echo -e "${YELLOW}• Vertex服务的费用根据各模型和用量${BOLD}不同而异${NC}${YELLOW}，某些高级模型费用较高。${NC}"
@@ -1668,7 +1669,7 @@ show_vertex_help() {
   
   echo -e "${RED}${BOLD}====== 费用警告 ======${NC}"
   echo -e "${YELLOW}• Vertex AI 需要有效的结算账户${NC}"
-  echo -e "${YELLOW}• 使用会消耗 Google Cloud $300 免费额度${NC}"
+  echo -e "${YELLOW}• 使用会消耗 Google Cloud \$300 免费额度${NC}"
   echo -e "${YELLOW}• 用完免费额度后将产生实际费用${NC}"
   echo -e "${YELLOW}• 未及时停止使用可能导致高额费用${NC}"
   echo -e "${YELLOW}• 强烈建议设置预算警报和支出限额${NC}"
@@ -1777,6 +1778,216 @@ cleanup_resources() {
   
   # 显示退出信息
   log "INFO" "脚本已退出，感谢使用"
+}
+
+# 添加命令行参数和高级用法说明
+show_advanced_usage() {
+  clear
+  echo -e "${CYAN}${BOLD}========== 命令行参数和高级用法 ==========${NC}"
+  echo ""
+  
+  echo -e "${BOLD}环境变量:${NC}"
+  echo "本脚本支持通过环境变量自定义多项配置:"
+  echo -e "${YELLOW}PROJECT_PREFIX${NC} - 项目前缀 (默认: gemini-key/vertex)"
+  echo -e "${YELLOW}MAX_RETRY${NC} - 失败操作最大重试次数 (默认: 3)"
+  echo -e "${YELLOW}CONCURRENCY${NC} - 最大并行任务数 (默认: 20)"
+  echo -e "${YELLOW}BILLING_ACCOUNT${NC} - 默认结算账户ID"
+  echo -e "${YELLOW}MAX_PROJECTS_PER_ACCOUNT${NC} - 每账户最大项目数 (默认: 3)"
+  echo -e "${YELLOW}SERVICE_ACCOUNT_NAME${NC} - 服务账号名称 (默认: vertex-admin)"
+  echo -e "${YELLOW}KEY_DIR${NC} - 密钥存储目录 (默认: ./keys)"
+  echo ""
+  
+  echo -e "${BOLD}使用示例:${NC}"
+  echo "1. 设置项目前缀和并行任务数:"
+  echo "   PROJECT_PREFIX=myproject CONCURRENCY=10 ./combined_gcp_keys.sh"
+  echo ""
+  echo "2. 指定结算账户和密钥目录:"
+  echo "   BILLING_ACCOUNT=123456-ABCDEF KEY_DIR=/secure/keys ./combined_gcp_keys.sh"
+  echo ""
+  
+  echo -e "${BOLD}批处理模式:${NC}"
+  echo "可以通过管道或重定向输入来自动化某些操作:"
+  echo "例如，创建多个批次的Gemini API密钥:"
+  echo "  echo -e \"1\\n10\\ngemini-batch1\\ny\" | ./combined_gcp_keys.sh"
+  echo "  (这将选择Gemini API选项，创建10个项目，前缀为gemini-batch1)"
+  echo ""
+  
+  echo -e "${BOLD}选项细节:${NC}"
+  echo "项目前缀 (PROJECT_PREFIX):"
+  echo "  - 必须以小写字母开头"
+  echo "  - 只能包含小写字母、数字和连字符"
+  echo "  - 最大长度为28个字符(创建时会添加随机后缀)"
+  echo ""
+  echo "并行任务数 (CONCURRENCY):"
+  echo "  - 建议值: 5-50"
+  echo "  - 过大的值可能导致超出API限制或触发风控"
+  echo "  - 过小的值会延长操作时间"
+  echo ""
+  echo "重试次数 (MAX_RETRY):"
+  echo "  - 建议值: 1-5"
+  echo "  - 增加此值可以提高在网络不稳定时的成功率"
+  echo ""
+  
+  read -p "按回车键继续..." _
+  show_help
+}
+
+# 添加故障排除和常见问题
+show_troubleshooting() {
+  clear
+  echo -e "${CYAN}${BOLD}========== 故障排除和常见问题 ==========${NC}"
+  echo ""
+  
+  echo -e "${BOLD}常见错误:${NC}"
+  echo "1. 未授权/权限错误:"
+  echo "   • 确保已运行 gcloud auth login 并成功登录"
+  echo "   • 检查当前用户是否有足够的 IAM 权限"
+  echo "   • 尝试运行 gcloud auth application-default login"
+  echo ""
+  
+  echo "2. 项目创建失败:"
+  echo "   • 可能达到项目创建配额限制"
+  echo "   • 检查账号是否已被标记为可疑账号"
+  echo "   • 尝试降低创建速率或减少批量创建数量"
+  echo ""
+  
+  echo "3. API 启用失败:"
+  echo "   • 检查项目是否已关联结算账户(Vertex AI需要)"
+  echo "   • 可能受到API服务限制，等待一段时间后重试"
+  echo "   • 尝试在GCP控制台手动启用API"
+  echo ""
+  
+  echo "4. 服务账号创建失败:"
+  echo "   • 检查IAM API是否已启用"
+  echo "   • 确认您有足够的权限创建服务账号"
+  echo "   • 检查是否达到服务账号数量限制"
+  echo ""
+  
+  echo "5. 无法获取API密钥:"
+  echo "   • 检查API是否已成功启用"
+  echo "   • 确认项目状态是否为活跃"
+  echo "   • 尝试在GCP控制台手动创建API密钥"
+  echo ""
+  
+  echo -e "${BOLD}Gemini特有问题:${NC}"
+  echo "1. 批量操作后账号被临时锁定:"
+  echo "   • 这是正常的风控措施"
+  echo "   • 停止创建新项目，等待24-48小时"
+  echo "   • 后续操作请降低创建速率"
+  echo ""
+  
+  echo "2. API密钥无效或不工作:"
+  echo "   • 检查密钥是否已被禁用(可在GCP控制台查看)"
+  echo "   • 验证API配额是否已用尽"
+  echo "   • 尝试创建新的API密钥"
+  echo ""
+  
+  echo -e "${BOLD}Vertex AI特有问题:${NC}"
+  echo "1. Vertex API调用失败:"
+  echo "   • 确认已正确设置服务账号权限"
+  echo "   • 验证结算账户是否有效"
+  echo "   • 检查服务账号密钥文件格式是否正确"
+  echo ""
+  
+  echo "2. 意外计费:"
+  echo "   • 立即检查并禁用不需要的API"
+  echo "   • 删除不再使用的项目"
+  echo "   • 在结算中心设置预算警报和限额"
+  echo ""
+  
+  echo -e "${BOLD}其他常见问题:${NC}"
+  echo "Q: 脚本执行时间过长怎么办?"
+  echo "A: 增加CONCURRENCY值，减少创建的项目数量，或分批次执行"
+  echo ""
+  echo "Q: 如何验证API密钥是否有效?"
+  echo "A: 可以使用curl命令测试API调用，具体请参考Google API文档"
+  echo ""
+  echo "Q: 如何管理大量创建的项目?"
+  echo "A: 使用有意义的项目前缀，并维护一个项目清单文件"
+  echo ""
+  
+  read -p "按回车键继续..." _
+  show_help
+}
+
+# 添加使用示例和最佳实践
+show_examples() {
+  clear
+  echo -e "${CYAN}${BOLD}========== 使用示例和最佳实践 ==========${NC}"
+  echo ""
+  
+  echo -e "${BOLD}Gemini API 使用示例:${NC}"
+  echo "1. 创建小批量项目并获取API密钥:"
+  echo "   • 选择选项1 (创建 Gemini API 密钥)"
+  echo "   • 选择子选项1 (创建新项目并获取API密钥)"
+  echo "   • 输入项目数量: 5-10 (建议每次不超过20个)"
+  echo "   • 使用有意义的项目前缀 (如gemini-test-0601)"
+  echo "   • 操作完成后，密钥将保存在当前目录下"
+  echo ""
+  
+  echo "2. 从现有项目获取密钥:"
+  echo "   • 选择选项1 (创建 Gemini API 密钥)"
+  echo "   • 选择子选项2 (从现有项目获取API密钥)"
+  echo "   • 根据列表选择要处理的项目"
+  echo "   • 脚本将启用API并获取密钥"
+  echo ""
+  
+  echo "3. 清理不需要的项目:"
+  echo "   • 定期执行此操作避免资源浪费"
+  echo "   • 选择选项1 (创建 Gemini API 密钥)"
+  echo "   • 选择子选项3 (删除现有项目)"
+  echo "   • 谨慎选择要删除的项目"
+  echo "   • 输入DELETE-ALL确认删除"
+  echo ""
+  
+  echo -e "${BOLD}Vertex AI 使用示例:${NC}"
+  echo "1. 在现有结算账户上创建项目:"
+  echo "   • 选择选项2 (创建 Vertex AI API 密钥)"
+  echo "   • 选择要使用的结算账户"
+  echo "   • 选择操作方式2 (创建新项目)"
+  echo "   • 指定项目数量 (建议1-3个)"
+  echo "   • 设置项目前缀"
+  echo "   • 操作完成后，密钥将保存在 $KEY_DIR 目录"
+  echo ""
+  
+  echo "2. 在现有项目上配置Vertex AI:"
+  echo "   • 选择选项2 (创建 Vertex AI API 密钥)"
+  echo "   • 选择操作方式1 (在现有项目上创建密钥)"
+  echo "   • 选择要处理的项目"
+  echo "   • 脚本会自动启用API、创建服务账号和密钥"
+  echo ""
+  
+  echo -e "${BOLD}最佳实践:${NC}"
+  echo "1. Gemini API使用:"
+  echo "   • 使用多个项目分散API调用，避免单一项目超出配额"
+  echo "   • 建议每个普通应用场景创建5-10个项目即可"
+  echo "   • 设置有规律的项目前缀便于管理"
+  echo "   • 定期清理不再使用的项目"
+  echo ""
+  
+  echo "2. Vertex AI使用:"
+  echo "   • 严格控制项目数量，避免不必要的费用"
+  echo "   • 为每个项目设置预算警报"
+  echo "   • 测试完成后即禁用API或删除项目"
+  echo "   • 妥善保管密钥文件，避免泄露"
+  echo ""
+  
+  echo "3. 密钥管理:"
+  echo "   • 将API密钥存储在安全位置"
+  echo "   • 不要在公共代码库中硬编码密钥"
+  echo "   • 考虑使用环境变量或密钥管理系统"
+  echo "   • 定期轮换密钥以提高安全性"
+  echo ""
+  
+  echo "4. 成本控制:"
+  echo "   • 为结算账户设置预算警报"
+  echo "   • 监控API使用情况"
+  echo "   • 了解各API的计费模式和费率"
+  echo "   • 不使用时及时关闭或删除资源"
+  echo ""
+  
+  read -p "按回车键继续..." _
+  show_help
 }
 
 # 添加API特性比较与选择指南

@@ -1,6 +1,35 @@
 #!/bin/bash
 set -Eeuo pipefail
-trap 'printf "[ERROR] 在第 %d 行中止 (退出码 %d)\n" "$LINENO" "$?" >&2' ERR
+
+# 添加颜色定义到开头
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+BOLD='\033[1m'
+
+# 定义log函数，以便在trap中使用
+log() { 
+  local level="${1:-INFO}"
+  local msg="${2:-}"
+  local timestamp
+  timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+  
+  # 修复颜色显示问题，避免直接输出原始ANSI序列
+  case "$level" in
+    "INFO")     printf "[%s] [INFO] %s\n" "$timestamp" "$msg" ;;
+    "SUCCESS")  printf "[%s] [SUCCESS] %s\n" "$timestamp" "$msg" ;;
+    "WARN")     printf "[%s] [WARN] %s\n" "$timestamp" "$msg" ;;
+    "ERROR")    printf "[%s] [ERROR] %s\n" "$timestamp" "$msg" ;;
+    *)          printf "[%s] [%s] %s\n" "$timestamp" "$level" "$msg" ;;
+  esac
+}
+
+# 修改错误处理方式，避免在某些错误时立即退出整个脚本
+trap 'printf "[ERROR] 在第 %d 行中止 (退出码 %d)\n" "$LINENO" "$?" >&2; exit_code=$?; if [ $exit_code -ne 0 ]; then log "ERROR" "出现错误，但将继续执行"; fi' ERR
 
 # ===== 配置选项 =====
 # 通用配置
@@ -34,16 +63,6 @@ ENABLE_EXTRA_ROLES=("${ENABLE_EXTRA_ROLES[@]:-roles/iam.serviceAccountUser roles
 VERSION="1.0.0"
 LAST_UPDATED="2025-05-22"
 
-# 添加颜色定义到开头
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-BOLD='\033[1m'
-
 # ===== 风险提示与帮助文档 =====
 
 # 风险与免责声明
@@ -69,27 +88,13 @@ WELCOME_BANNER(){
 }
 
 # ===== 初始化 =====
-# 创建临时目录
+# 创建临时目录和密钥目录
 mkdir -p "$TEMP_DIR"
 mkdir -p "$KEY_DIR" && chmod 700 "$KEY_DIR"
 SECONDS=0
 
 # ===== 工具函数 =====
-# 日志函数
-log() { 
-  local level="${1:-INFO}"
-  local msg="${2:-}"
-  local timestamp
-  timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-  
-  case "$level" in
-    "INFO")     printf "[%s] [%s%s%s] %s\n" "$timestamp" "${BLUE}" "$level" "${NC}" "$msg" ;;
-    "SUCCESS")  printf "[%s] [%s%s%s] %s\n" "$timestamp" "${GREEN}" "$level" "${NC}" "$msg" ;;
-    "WARN")     printf "[%s] [%s%s%s] %s\n" "$timestamp" "${YELLOW}" "$level" "${NC}" "${YELLOW}$msg${NC}" ;;
-    "ERROR")    printf "[%s] [%s%s%s] %s\n" "$timestamp" "${RED}" "$level" "${NC}" "${RED}$msg${NC}" ;;
-    *)          printf "[%s] [%s] %s\n" "$timestamp" "$level" "$msg" ;;
-  esac
-}
+# 日志函数已在文件开头定义
 
 # 改进的指数退避重试函数
 retry() {
@@ -398,10 +403,20 @@ latest_cloud_key() { gcloud iam service-accounts keys list --iam-account="$1" --
 gen_key() {
   local proj=$1 sa=$2 ts=$(date +%Y%m%d-%H%M%S)
   local key_file="${KEY_DIR}/${proj}-${SERVICE_ACCOUNT_NAME}-${ts}.json"
-  retry gcloud iam service-accounts keys create "$key_file" --iam-account="$sa" --project="$proj" --quiet
+  
+  # 确保密钥目录存在
+  mkdir -p "$KEY_DIR" 2>/dev/null
+  
+  # 添加错误处理和返回值
+  if ! retry gcloud iam service-accounts keys create "$key_file" --iam-account="$sa" --project="$proj" --quiet; then
+    log "ERROR" "无法为服务账号 $sa 创建密钥"
+    return 1
+  fi
+  
   chmod 600 "$key_file"
   log "INFO" "[$proj] 新JSON格式密钥已创建 → $key_file"
   log "INFO" "此JSON密钥文件可直接用于访问Vertex AI API"
+  return 0
 }
 
 # 置备服务账号
@@ -464,8 +479,18 @@ provision_sa() {
   log "INFO" "验证服务账号权限..."
   if gcloud projects get-iam-policy "$proj" --format="json" | grep -q "$sa"; then
     log "SUCCESS" "服务账号 $sa 权限配置已验证"
+    
+    # 为服务账号创建密钥
+    log "INFO" "为服务账号 $sa 创建密钥..."
+    if ! gen_key "$proj" "$sa"; then
+      log "ERROR" "为服务账号 $sa 创建密钥失败"
+      return 1
+    fi
+    
+    return 0
   else
     log "WARN" "无法验证服务账号权限，这可能导致后续使用API时出现权限问题"
+    return 1
   fi
 }
 
@@ -501,6 +526,13 @@ create_vertex_project() {
   # 配置服务账号和权限
   if ! provision_sa "$pid"; then
     log "ERROR" "为项目 $pid 设置服务账号失败"
+    return 1
+  fi
+  
+  # 添加缺失的生成密钥功能
+  local sa="${SERVICE_ACCOUNT_NAME}@${pid}.iam.gserviceaccount.com"
+  if ! gen_key "$pid" "$sa"; then
+    log "ERROR" "为项目 $pid 生成密钥失败"
     return 1
   fi
   
@@ -602,6 +634,9 @@ handle_vertex_billing() {
   echo "0. 返回上一级菜单"
   echo ""
   read -p "请选择 [0-3]: " operation_choice
+  
+  # 使用本地变量跟踪操作结果
+  local operation_result=0
   
   case $operation_choice in
     1) 
@@ -788,8 +823,11 @@ handle_new_projects() {
   VERTEX_PROJECT_PREFIX=$custom_prefix
   
   while (( created < num_to_create )); do 
-    if create_vertex_project; then
+    # 将create_vertex_project的执行放在子shell中，防止错误传播
+    if (create_vertex_project); then
       ((success_count++))
+    else
+      log "WARN" "项目创建失败，但将继续创建剩余项目"
     fi
     ((created++))
     show_progress "$created" "$num_to_create"

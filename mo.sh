@@ -19,7 +19,7 @@ BOLD='\033[1m'
 # ===== 全局配置 =====
 # 版本信息
 VERSION="2.0.0"
-LAST_UPDATED="2025-01-01"
+LAST_UPDATED="2025-05-23"
 
 # 通用配置
 PROJECT_PREFIX="${PROJECT_PREFIX:-gemini-key}"

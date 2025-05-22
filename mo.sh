@@ -170,13 +170,33 @@ unique_suffix() {
 # 新增: 安全检测服务是否已启用 (兼容 pipefail)
 is_service_enabled() {
   local proj="$1" svc="$2"
-  # gcloud 若未找到服务会返回退出码 1，这里忽略退出码，仅检测输出
-  if (gcloud services list --enabled --project="$proj" \
-        --filter="$svc" --format='value(config.name)' 2>/dev/null || true) | grep -q .; then
-    return 0
-  else
-    return 1
-  fi
+  # 保存当前 errexit 与 pipefail 状态
+  local _errexit_set=0 _pipefail_set=0
+  if set -o | grep -q "errexit.*on"; then _errexit_set=1; fi
+  if set -o | grep -q "pipefail.*on"; then _pipefail_set=1; fi
+  set +e +o pipefail
+  gcloud services list --enabled --project="$proj" \
+        --filter="$svc" --format='value(config.name)' 2>/dev/null | grep -q .
+  local rc=$?
+  [ $_errexit_set -eq 1 ] && set -e
+  [ $_pipefail_set -eq 1 ] && set -o pipefail
+  return $rc
+}
+
+# ---------- 通用安全辅助函数 ----------
+with_no_err() {
+  local _e=$(set +o | grep errexit)
+  local _p=$(set +o | grep pipefail)
+  set +e +o pipefail
+  "$@"; local rc=$?
+  eval "$_e"; eval "$_p"
+  return $rc
+}
+
+safe_mapfile() {
+  local __arr=$1; shift
+  with_no_err mapfile -t "$__arr" < <("$@") || return 1
+  return 0
 }
 
 # 生成新项目ID
@@ -906,7 +926,7 @@ handle_existing_projects() {
       local existing_keys=()
       
       # 尝试获取密钥列表，如果失败则输出警告但继续执行
-      if ! mapfile -t existing_keys < <(list_cloud_keys "$sa" 2>/dev/null); then
+      if ! safe_mapfile existing_keys list_cloud_keys "$sa"; then
         log "WARN" "获取服务账号 $sa 的密钥列表失败，假定没有现有密钥"
         existing_keys=()
       fi

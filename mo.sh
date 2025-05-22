@@ -28,8 +28,25 @@ log() {
   esac
 }
 
-# 修改错误处理方式，避免在某些错误时立即退出整个脚本
-trap 'printf "[ERROR] 在第 %d 行中止 (退出码 %d)\n" "$LINENO" "$?" >&2; exit_code=$?; if [ $exit_code -ne 0 ]; then log "ERROR" "出现错误，但将继续执行"; fi' ERR
+# 改进错误处理方式，更加健壮，避免小错误导致整个脚本终止
+handle_error() {
+  local exit_code=$?
+  local line_no=$1
+  
+  # 记录错误但继续执行
+  printf "[ERROR] 在第 %d 行发生错误 (退出码 %d)\n" "$line_no" "$exit_code" >&2
+  
+  # 除非是严重错误，否则不终止脚本执行
+  if [ $exit_code -gt 1 ]; then
+    log "ERROR" "发生严重错误，请检查上面的日志以获取详细信息"
+  else
+    log "WARN" "发生非严重错误，脚本将继续执行"
+    return 0  # 返回成功状态，允许脚本继续执行
+  fi
+}
+
+# 设置ERR trap，但允许脚本继续执行
+trap 'handle_error $LINENO' ERR
 
 # ===== 配置选项 =====
 # 通用配置
@@ -150,6 +167,18 @@ unique_suffix() {
   date +%s%N | sha256sum | head -c6
 }
 
+# 新增: 安全检测服务是否已启用 (兼容 pipefail)
+is_service_enabled() {
+  local proj="$1" svc="$2"
+  # gcloud 若未找到服务会返回退出码 1，这里忽略退出码，仅检测输出
+  if (gcloud services list --enabled --project="$proj" \
+        --filter="$svc" --format='value(config.name)' 2>/dev/null || true) | grep -q .; then
+    return 0
+  else
+    return 1
+  fi
+}
+
 # 生成新项目ID
 new_project_id() { 
   local prefix="$1"
@@ -254,7 +283,7 @@ enable_services() {
   
   for svc in "$@"; do
     log "INFO" "检查并启用服务: $svc"
-    if gcloud services list --enabled --project="$proj" --filter="$svc" --format='value(config.name)' | grep -q .; then
+    if is_service_enabled "$proj" "$svc"; then
       log "INFO" "服务 $svc 已经启用"
       continue
     fi
@@ -270,7 +299,7 @@ enable_services() {
   log "INFO" "验证关键服务是否已成功启用..."
   local all_enabled=true
   for svc in "$@"; do
-    if ! gcloud services list --enabled --project="$proj" --filter="$svc" --format='value(config.name)' | grep -q .; then
+    if ! is_service_enabled "$proj" "$svc"; then
       log "ERROR" "服务 $svc 验证失败，未成功启用"
       all_enabled=false
     fi
@@ -400,7 +429,10 @@ show_progress() {
 }
 
 # 从vertex.sh中的服务账号功能
-list_cloud_keys()  { gcloud iam service-accounts keys list --iam-account="$1" --format='value(name)' | sed 's|.*/||'; }
+list_cloud_keys()  { 
+  # 添加错误处理
+  gcloud iam service-accounts keys list --iam-account="$1" --format='value(name)' 2>/dev/null | sed 's|.*/||' || echo ""
+}
 latest_cloud_key() { gcloud iam service-accounts keys list --iam-account="$1" --limit=1 --sort-by=~createTime --format='value(name)' | sed 's|.*/||'; }
 
 # 生成服务账号密钥
@@ -569,7 +601,7 @@ show_vertex_status() {
   
   for proj in "${ALL_PROJECTS[@]}"; do
     # 检查项目是否启用了Vertex API
-    if gcloud services list --enabled --project="$proj" --filter='aiplatform.googleapis.com' --format='value(config.name)' 2>/dev/null | grep -q .; then
+    if is_service_enabled "$proj" 'aiplatform.googleapis.com'; then
       # 项目启用了Vertex API
       local api_status="${GREEN}已启用${NC}"
       vertex_projects+=("$proj")
@@ -612,26 +644,38 @@ handle_vertex_billing() {
   log "INFO" "======================================================"
   
   # ===== 步骤1: 检查已绑定到此结算账户的项目 =====
-  # 增加调试输出，并使用更明确的命令格式
   log "INFO" "获取绑定到结算账户 $billing_acc 的项目列表..."
   
-  # 使用更可靠的命令直接获取项目数量，并显示命令输出
-  local billing_list_cmd="gcloud beta billing projects list --billing-account=\"$billing_acc\" --format=\"table(projectId)\" 2>/dev/null"
-  log "INFO" "执行命令: $billing_list_cmd"
+  # 直接获取所有项目，然后筛选符合条件的
+  log "INFO" "获取所有项目列表，并筛选结算账户..."
+  local all_projects_output
+  all_projects_output=$(gcloud projects list --format="value(projectId)" 2>/dev/null || echo "")
   
-  # 保存输出用于调试，添加错误处理防止命令失败导致脚本退出
-  local billing_list_output=""
-  billing_list_output=$(eval "$billing_list_cmd" || echo "ERROR:命令执行失败")
-  
-  # 检查命令是否失败
-  if [[ "$billing_list_output" == ERROR:* ]]; then
-    log "WARN" "获取项目列表失败，假设没有关联项目"
+  # 检查是否成功获取项目列表
+  if [ -z "$all_projects_output" ]; then
+    log "WARN" "无法获取项目列表，假设没有关联项目"
     BILLING_PROJECTS=()
   else
-    # 移除标题行
-    mapfile -t BILLING_PROJECTS < <(echo "$billing_list_output" | grep -v "^PROJECT_ID" | grep -v "^-" | grep -v "^$" || echo "")
+    mapfile -t ALL_PROJECTS < <(echo "$all_projects_output")
+    log "INFO" "找到 ${#ALL_PROJECTS[@]} 个项目，检查它们的结算账户..."
+    
+    # 创建一个空数组存储匹配的项目
+    BILLING_PROJECTS=()
+    
+    # 对每个项目检查其结算账户
+    for proj in "${ALL_PROJECTS[@]}"; do
+      local proj_billing
+      proj_billing=$(gcloud beta billing projects describe "$proj" --format="value(billingAccountName)" 2>/dev/null || echo "")
+      
+      # 提取结算账户ID部分并比较
+      if [[ "$proj_billing" == *"$billing_acc"* ]]; then
+        BILLING_PROJECTS+=("$proj")
+        log "INFO" "项目 $proj 使用结算账户 $billing_acc"
+      fi
+    done
   fi
   
+  # 计算项目数量
   local account_project_count=${#BILLING_PROJECTS[@]}
   
   log "INFO" "结算账户 $billing_acc 已绑定 $account_project_count / $MAX_PROJECTS_PER_ACCOUNT 个项目"
@@ -656,7 +700,7 @@ handle_vertex_billing() {
   echo "3. 同时处理现有项目和创建新项目"
   echo "0. 返回上一级菜单"
   echo ""
-
+ 
   # 使用循环处理用户输入，确保输入有效
   local operation_choice=""
   while true; do
@@ -711,9 +755,9 @@ handle_vertex_billing() {
 handle_existing_projects() {
   local billing_acc="$1"
   
-  # 获取此结算账户下的项目
-  mapfile -t ACCOUNT_PROJECTS < <(gcloud beta billing projects list --billing-account="$billing_acc" --format='value(projectId)' 2>/dev/null || echo "")
-  local account_project_count=${#ACCOUNT_PROJECTS[@]}
+  # 获取此结算账户下的项目，直接使用BILLING_PROJECTS数组
+  # 这个数组是在handle_vertex_billing中填充的
+  local account_project_count=${#BILLING_PROJECTS[@]}
   
   if [ $account_project_count -eq 0 ]; then
     log "WARN" "此结算账户下没有现有项目，无法处理"
@@ -725,7 +769,7 @@ handle_existing_projects() {
   log "INFO" "请选择要处理的项目:"
   echo "0. 处理所有项目"
   for ((i=0; i<account_project_count; i++)); do
-    echo "$((i+1)). ${ACCOUNT_PROJECTS[$i]}"
+    echo "$((i+1)). ${BILLING_PROJECTS[$i]}"
   done
   echo ""
   
@@ -752,9 +796,9 @@ handle_existing_projects() {
   local selected_projects=()
   if [[ "$proj_num_choice" == "0" ]]; then
     log "INFO" "将处理所有 $account_project_count 个项目"
-    selected_projects=("${ACCOUNT_PROJECTS[@]}")
+    selected_projects=("${BILLING_PROJECTS[@]}")
   else
-    selected_projects=("${ACCOUNT_PROJECTS[$((proj_num_choice-1))]}")
+    selected_projects=("${BILLING_PROJECTS[$((proj_num_choice-1))]}")
     log "INFO" "将处理项目: ${selected_projects[0]}"
   fi
   
@@ -765,8 +809,8 @@ handle_existing_projects() {
   $(printf '\n  • %s' "${selected_projects[@]}")
   
   此操作将:
-  1. 启用 Vertex AI API 和必要服务
-  2. 创建服务账号和API密钥
+  1. 检查并启用 Vertex AI API 和必要服务（如未启用）
+  2. 检查并按需创建服务账号和API密钥
   3. 可能产生实际费用
   
   请确保您了解相关费用和风险。
@@ -779,26 +823,150 @@ handle_existing_projects() {
   
   log "INFO" "开始处理 $total_projects 个现有项目..."
   
-  # 并行启用API
-  local proj pids=() running=0
-  log "INFO" "为所有选定项目启用 Vertex AI API..."
+  # 处理每个选定的项目
   for proj in "${selected_projects[@]}"; do
     ((current++))
     log "INFO" "[$current/$total_projects] 正在处理项目: $proj"
     
-    # 确保项目已启用必要API
-    if enable_services "$proj"; then
-      log "SUCCESS" "成功为项目 $proj 启用所需API"
+    # 确保这个项目存在且可访问
+    if ! gcloud projects describe "$proj" &>/dev/null; then
+      log "ERROR" "无法访问项目 $proj，请检查项目ID和权限"
+      continue
+    fi
+    
+    # 1. 首先检查项目是否已启用Vertex AI API
+    local api_enabled=false
+    if is_service_enabled "$proj" 'aiplatform.googleapis.com'; then
+      log "INFO" "项目 $proj 已启用 Vertex AI API"
+      api_enabled=true
+    else
+      log "INFO" "项目 $proj 尚未启用 Vertex AI API，正在启用..."
+      if enable_services "$proj"; then
+        log "SUCCESS" "成功为项目 $proj 启用所需API"
+        api_enabled=true
+      else
+        log "ERROR" "为项目 $proj 启用API失败"
+        continue
+      fi
+    fi
+    
+    # 2. 检查服务账号状态
+    local sa="${SERVICE_ACCOUNT_NAME}@${proj}.iam.gserviceaccount.com"
+    local sa_exists=false
+    if gcloud iam service-accounts describe "$sa" --project "$proj" &>/dev/null; then
+      log "INFO" "服务账号 $sa 已存在"
+      sa_exists=true
+    else
+      log "INFO" "服务账号 $sa 不存在，是否创建?"
+      if ask_yes_no "是否为项目 $proj 创建服务账号? [y/N]: " "N"; then
+        # 只配置服务账号，不生成密钥
+        if retry gcloud iam service-accounts create "$SERVICE_ACCOUNT_NAME" --display-name="Vertex Admin" --project "$proj" --quiet; then
+          log "SUCCESS" "成功创建服务账号 $sa"
+          sa_exists=true
+          
+          # 分配所需角色
+          local roles=(
+            "roles/aiplatform.admin"          # Vertex AI Administrator (必备权限)
+            "roles/iam.serviceAccountUser"    # Service Account User
+            "roles/iam.serviceAccountTokenCreator"  # Token Creator (可能需要用于生成访问令牌)
+            "roles/aiplatform.user"           # Vertex AI User
+          )
+          
+          # 添加自定义角色
+          roles+=("${ENABLE_EXTRA_ROLES[@]}")
+          
+          # 去重
+          roles=($(echo "${roles[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+          
+          log "INFO" "为服务账号分配以下角色: ${roles[*]}"
+          local binding_failures=0
+          
+          for r in "${roles[@]}"; do 
+            log "INFO" "分配角色: $r"
+            if retry gcloud projects add-iam-policy-binding "$proj" --member="serviceAccount:$sa" --role="$r" --quiet; then
+              log "SUCCESS" "成功将角色 $r 分配给服务账号 $sa"
+            else
+              log "ERROR" "无法将角色 $r 分配给服务账号，这可能导致权限不足"
+              ((binding_failures++))
+            fi
+          done
+        else
+          log "ERROR" "为项目 $proj 创建服务账号失败"
+          continue
+        fi
+      else
+        log "INFO" "跳过为项目 $proj 创建服务账号"
+        continue
+      fi
+    fi
+    
+    # 3. 检查现有密钥并管理
+    if $sa_exists; then
+      # 添加错误处理，防止获取密钥列表失败导致脚本崩溃
+      local existing_keys=()
       
-      # 配置服务账号和密钥
-      if provision_sa "$proj"; then
-        log "SUCCESS" "成功为项目 $proj 配置服务账号和密钥"
+      # 尝试获取密钥列表，如果失败则输出警告但继续执行
+      if ! mapfile -t existing_keys < <(list_cloud_keys "$sa" 2>/dev/null); then
+        log "WARN" "获取服务账号 $sa 的密钥列表失败，假定没有现有密钥"
+        existing_keys=()
+      fi
+      
+      local key_count=${#existing_keys[@]}
+      
+      if [ $key_count -gt 0 ]; then
+        log "INFO" "服务账号 $sa 已有 $key_count 个密钥"
+        echo "现有密钥:"
+        for key in "${existing_keys[@]}"; do
+          echo " - $key"
+        done
+        
+        echo ""
+        echo "密钥操作选项:"
+        echo "1. 保留现有密钥并创建新密钥"
+        echo "2. 删除所有现有密钥后创建新密钥"
+        echo "3. 不创建新密钥，保持现状"
+        
+        local key_op=""
+        while true; do
+          read -p "请选择操作 [1-3]: " key_op
+          
+          if [[ "$key_op" =~ ^[1-3]$ ]]; then
+            break
+          else
+            echo "无效选项: '$key_op'，请输入1-3之间的数字"
+          fi
+        done
+        
+        case $key_op in
+          1)
+            log "INFO" "保留现有密钥并创建新密钥"
+            ;;
+          2)
+            log "INFO" "删除所有现有密钥后创建新密钥"
+            for key in "${existing_keys[@]}"; do
+              if retry gcloud iam service-accounts keys delete "$key" --iam-account="$sa" --quiet; then
+                log "SUCCESS" "已删除密钥: $key"
+              else
+                log "ERROR" "删除密钥 $key 失败"
+              fi
+            done
+            ;;
+          3)
+            log "INFO" "不创建新密钥，保持现状"
+            continue
+            ;;
+        esac
+      else
+        log "INFO" "服务账号 $sa 没有现有密钥"
+      fi
+      
+      # 创建新密钥
+      if gen_key "$proj" "$sa"; then
+        log "SUCCESS" "成功为项目 $proj 生成新密钥"
         ((success_count++))
       else
-        log "ERROR" "为项目 $proj 配置服务账号失败"
+        log "ERROR" "为项目 $proj 生成密钥失败"
       fi
-    else
-      log "ERROR" "为项目 $proj 启用API失败"
     fi
   done
   
@@ -810,24 +978,8 @@ handle_existing_projects() {
 handle_new_projects() {
   local billing_acc="$1"
   
-  # 获取现有项目数量 - 使用更可靠的方法获取
-  log "INFO" "获取结算账户 $billing_acc 的已绑定项目..."
-  local billing_list_cmd="gcloud beta billing projects list --billing-account=\"$billing_acc\" --format=\"table(projectId)\" 2>/dev/null"
-  local billing_list_output=""
-  
-  # 添加错误处理，防止命令失败导致脚本退出
-  billing_list_output=$(eval "$billing_list_cmd" || echo "ERROR:命令执行失败")
-  
-  # 检查命令是否失败
-  if [[ "$billing_list_output" == ERROR:* ]]; then
-    log "WARN" "获取项目列表失败，假设没有关联项目"
-    ACCOUNT_PROJECTS=()
-  else
-    # 移除标题行，获取实际项目列表
-    mapfile -t ACCOUNT_PROJECTS < <(echo "$billing_list_output" | grep -v "^PROJECT_ID" | grep -v "^-" | grep -v "^$" || echo "")
-  fi
-  
-  local account_project_count=${#ACCOUNT_PROJECTS[@]}
+  # 直接使用BILLING_PROJECTS数组(已在handle_vertex_billing中生成)
+  local account_project_count=${#BILLING_PROJECTS[@]}
   
   log "INFO" "结算账户 $billing_acc 当前已绑定 $account_project_count 个项目"
   
@@ -1699,7 +1851,7 @@ show_help() {
   echo "5. 故障排除和常见问题"
   echo "6. 使用示例和最佳实践"
   echo "7. API特性比较与选择指南"
-  echo "0. 返回主菜单"
+  echo "0. 进入脚本"
   echo ""
   
   # 使用循环处理用户输入，确保输入有效
